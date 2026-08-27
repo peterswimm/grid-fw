@@ -198,17 +198,33 @@ int l_grid_cat(lua_State* L) {
 
 #endif
 
+/// Append to a bounded buffer, reporting truncation instead of overrunning it.
+static bool grid_lua_message_append(char* message, size_t capacity, const char* text) {
+
+  size_t used = strlen(message);
+  size_t len = strlen(text);
+
+  if (used + len + 1 > capacity) {
+    return false;
+  }
+
+  memcpy(&message[used], text, len + 1);
+
+  return true;
+}
+
 /*static*/ int l_grid_websocket_send(lua_State* L) {
 
   char message[GRID_PARAMETER_SPI_TRANSACTION_length] = {0};
 
   int nargs = lua_gettop(L);
+  bool truncated = false;
   // grid_platform_printf("LUA PRINT: ");
-  for (int i = 1; i <= nargs; ++i) {
+  for (int i = 1; i <= nargs && !truncated; ++i) {
 
     if (lua_type(L, i) == LUA_TSTRING) {
 
-      strcat(message, lua_tostring(L, i));
+      truncated |= !grid_lua_message_append(message, sizeof(message), lua_tostring(L, i));
       // grid_platform_printf(" str: %s ", lua_tostring(L, i));
     } else if (lua_type(L, i) == LUA_TBOOLEAN) {
       lua_toboolean(L, i) ? grid_port_debug_printf("true") : grid_port_debug_printf("false");
@@ -219,18 +235,22 @@ int l_grid_cat(lua_State* L) {
       lua_numbertointeger(lnum, &lint);
       // int32_t num = lua_tonumber
 
-      sprintf(&message[strlen(message)], "%lf", lnum);
+      char number[32] = {0};
+      snprintf(number, sizeof(number), "%lf", lnum);
+      truncated |= !grid_lua_message_append(message, sizeof(message), number);
 
       // remove unnesesery trailing zeros
-      uint8_t index_helper = strlen(message);
-      for (uint8_t i = 0; i < 8; i++) {
+      // size_t, not uint8_t: a payload longer than 255 bytes would otherwise
+      // wrap and trim from the wrong offset.
+      size_t index_helper = strlen(message);
+      for (size_t j = 0; !truncated && j < 8 && j < index_helper; j++) {
 
-        if (message[index_helper - i - 1] == '0') {
+        if (message[index_helper - j - 1] == '0') {
 
-          message[index_helper - i - 1] = '\0';
-        } else if (message[index_helper - i - 1] == '.') {
+          message[index_helper - j - 1] = '\0';
+        } else if (message[index_helper - j - 1] == '.') {
 
-          message[index_helper - i - 1] = '\0';
+          message[index_helper - j - 1] = '\0';
           break;
         } else {
           break;
@@ -252,6 +272,11 @@ int l_grid_cat(lua_State* L) {
   }
 
   // grid_platform_printf("\r\n");
+
+  if (truncated) {
+    grid_lua_append_stde(&grid_lua_state, "#websocketMessageTooLong");
+    return 0;
+  }
 
   grid_port_websocket_print_text(message);
 
@@ -263,54 +288,59 @@ int l_grid_cat(lua_State* L) {
   char message[GRID_PARAMETER_SPI_TRANSACTION_length] = {0};
 
   int nargs = lua_gettop(L);
+  bool truncated = false;
   // grid_platform_printf("LUA PRINT: ");
-  for (int i = 1; i <= nargs; ++i) {
+  for (int i = 1; i <= nargs && !truncated; ++i) {
 
     if (lua_type(L, i) == LUA_TSTRING) {
       if (strlen(message) > 0) {
 
-        strcat(message, ",");
+        truncated |= !grid_lua_message_append(message, sizeof(message), ",");
       }
-      strcat(message, "\"");
-      strcat(message, lua_tostring(L, i));
-      strcat(message, "\"");
+      truncated |= !grid_lua_message_append(message, sizeof(message), "\"");
+      truncated |= !grid_lua_message_append(message, sizeof(message), lua_tostring(L, i));
+      truncated |= !grid_lua_message_append(message, sizeof(message), "\"");
       // grid_platform_printf(" str: %s ", lua_tostring(L, i));
     } else if (lua_type(L, i) == LUA_TBOOLEAN) {
       bool b = lua_toboolean(L, i);
       if (strlen(message) > 0) {
 
-        strcat(message, ",");
+        truncated |= !grid_lua_message_append(message, sizeof(message), ",");
       }
       if (b) {
 
-        strcat(message, "true");
+        truncated |= !grid_lua_message_append(message, sizeof(message), "true");
       } else {
 
-        strcat(message, "false");
+        truncated |= !grid_lua_message_append(message, sizeof(message), "false");
       }
     } else if (lua_type(L, i) == LUA_TNUMBER) {
 
       if (strlen(message) > 0) {
 
-        strcat(message, ",");
+        truncated |= !grid_lua_message_append(message, sizeof(message), ",");
       }
       lua_Number lnum = lua_tonumber(L, i);
       lua_Integer lint;
       lua_numbertointeger(lnum, &lint);
       // int32_t num = lua_tonumber
 
-      sprintf(&message[strlen(message)], "%lf", lnum);
+      char number[32] = {0};
+      snprintf(number, sizeof(number), "%lf", lnum);
+      truncated |= !grid_lua_message_append(message, sizeof(message), number);
 
       // remove unnesesery trailing zeros
-      uint8_t index_helper = strlen(message);
-      for (uint8_t i = 0; i < 8; i++) {
+      // size_t, not uint8_t: a payload longer than 255 bytes would otherwise
+      // wrap and trim from the wrong offset.
+      size_t index_helper = strlen(message);
+      for (size_t j = 0; !truncated && j < 8 && j < index_helper; j++) {
 
-        if (message[index_helper - i - 1] == '0') {
+        if (message[index_helper - j - 1] == '0') {
 
-          message[index_helper - i - 1] = '\0';
-        } else if (message[index_helper - i - 1] == '.') {
+          message[index_helper - j - 1] = '\0';
+        } else if (message[index_helper - j - 1] == '.') {
 
-          message[index_helper - i - 1] = '\0';
+          message[index_helper - j - 1] = '\0';
           break;
         } else {
           break;
@@ -332,6 +362,13 @@ int l_grid_cat(lua_State* L) {
   }
 
   // grid_platform_printf("\r\n");
+
+  // The host parses the payload as JSON. A half-written one would not parse, so
+  // report the problem here rather than sending something unusable.
+  if (truncated) {
+    grid_lua_append_stde(&grid_lua_state, "#packageMessageTooLong");
+    return 0;
+  }
 
   grid_port_package_print_text(message);
 
@@ -2158,7 +2195,15 @@ int l_grid_action_set(lua_State* L) {
     return 0;
   }
 
-  assert(grid_lua_str_is_actionstring(buf));
+  // The file is external input: it may have been written by the editor, by a
+  // host-side tool or by hand. A malformed one is a user error to report, not an
+  // invariant to assert on.
+  if (!grid_lua_str_is_actionstring(buf)) {
+    grid_lua_append_stde(&grid_lua_state, "#notActionString");
+    free(buf);
+    return 0;
+  }
+
   char* script = &buf[strlen(GRID_ACTION_PREFIX)];
   script[strlen(script) - strlen(GRID_ACTION_SUFFIX)] = '\0';
 
